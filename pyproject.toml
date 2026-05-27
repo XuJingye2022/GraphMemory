@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project]
+name = "graph-memory"
+version = "0.1.0"
+description = "AI Agent 有向联想图长期记忆系统"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "sentence-transformers>=3.0",
+    "apscheduler>=3.10",
+    "pyyaml>=6.0",
+    "numpy>=1.26",
+]

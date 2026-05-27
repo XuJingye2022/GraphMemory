@@ -1,0 +1,28 @@
+memory:
+  initial_half_life: 24          # 小时
+  alpha: 0.2                     # 复习增益因子
+  strength_threshold: 0.3        # 检索忽略阈值
+  inhibition_threshold: 0.7      # 阻断阈值
+  load_weights:
+    beta: 0.4                    # coreness 系数
+    gamma: 0.4                   # 任务相关性系数
+    delta: 0.2                   # 边平均强度系数
+  merge_similarity: 0.9
+  prune_coreness: 0.2
+  prune_days: 90
+
+maintenance:
+  merge_interval_hours: 24
+  prune_interval_hours: 24
+  replay_interval_days: 7
+  chain_log_retention_days: 90
+  lock_retry_times: 3
+
+database:
+  path: "memory.db"
+  backup_dir: "backups/"
+  incremental_backup: true
+
+logging:
+  level: "INFO"
+  file: "memory.log"
