@@ -16,6 +16,7 @@ import numpy as np
 import yaml
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi.staticfiles import StaticFiles
 
 from graph_memory import GraphMemory
 from graph_memory.maintenance import merge_similar_nodes, prune_dead_nodes, replay_core_paths
@@ -141,6 +142,10 @@ def _run_replay(memory, app, agent_profile):
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="Graph Memory API", version="0.1.0", lifespan=lifespan)
+
+_WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+if _WEB_DIR.exists():
+    app.mount("/", StaticFiles(directory=str(_WEB_DIR), html=True), name="web")
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GraphMemory 可视化</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #1a1a2e; color: #e0e0e0; overflow: hidden; height: 100vh; }
+#toolbar { position: fixed; top: 0; left: 0; right: 0; z-index: 100; display: flex; align-items: center; gap: 10px; padding: 12px 20px; background: rgba(26,26,46,0.92); backdrop-filter: blur(6px); border-bottom: 1px solid #2a2a4a; }
+#toolbar h1 { font-size: 16px; font-weight: 600; color: #7c7cba; margin-right: 16px; white-space: nowrap; }
+#toolbar input[type="text"] { flex: 1; max-width: 400px; padding: 8px 14px; border: 1px solid #3a3a5a; border-radius: 6px; background: #16213e; color: #e0e0e0; font-size: 14px; outline: none; }
+#toolbar input[type="text"]:focus { border-color: #7c7cba; }
+#toolbar button { padding: 8px 18px; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; background: #3a3a5a; color: #e0e0e0; transition: all 0.2s; white-space: nowrap; }
+#toolbar button:hover { background: #5a5a8a; }
+#toolbar button.active { background: #7c7cba; }
+#toolbar .badge { font-size: 12px; color: #888; margin-left: 8px; }
+svg { width: 100%; height: 100vh; }
+#legend { position: fixed; bottom: 20px; left: 20px; z-index: 100; background: rgba(26,26,46,0.88); backdrop-filter: blur(6px); border: 1px solid #2a2a4a; border-radius: 8px; padding: 12px 16px; font-size: 12px; line-height: 1.8; }
+#legend .item { display: flex; align-items: center; gap: 8px; }
+#legend .swatch { display: inline-block; width: 20px; height: 3px; border-radius: 2px; }
+#legend .swatch-circle { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+#tooltip { position: fixed; z-index: 200; background: rgba(0,0,0,0.85); backdrop-filter: blur(4px); border: 1px solid #4a4a6a; border-radius: 6px; padding: 8px 12px; font-size: 12px; pointer-events: none; opacity: 0; transition: opacity 0.15s; max-width: 360px; }
+.node-label { font-size: 11px; fill: #ccc; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
+.line text { font-size: 10px; fill: #666; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>🧠 GraphMemory</h1>
+  <input type="text" id="searchInput" placeholder="输入查询，检索记忆..." />
+  <button id="searchBtn">🔍 检索</button>
+  <button id="expandBtn">↗ 展开</button>
+  <button id="resetBtn">⟲ 重置</button>
+  <span class="badge" id="nodeCount"></span>
+</div>
+
+<div id="legend">
+  <div class="item"><span class="swatch" style="background:#4ade80;"></span> 强联想 (≥0.6)</div>
+  <div class="item"><span class="swatch" style="background:#6b7280;"></span> 弱联想 (0.3~0.6)</div>
+  <div class="item"><span class="swatch" style="background:#ef4444; opacity:0.7;"></span> 抑制边 (≥0.7)</div>
+  <div class="item"><span class="swatch" style="background:#f59e0b; opacity:0.7;"></span> 可疑边</div>
+  <div class="item"><span class="swatch-circle" style="background:#f87171; border:2px solid #dc2626;"></span> 工作记忆区 (Recall)</div>
+  <div class="item"><span class="swatch-circle" style="background:#60a5fa; border:2px solid #2563eb;"></span> 深度思考区 (Expand)</div>
+  <div class="item" style="color:#888;">节点大小 = Coreness</div>
+</div>
+
+<div id="tooltip"></div>
+
+<svg id="graph"></svg>
+
+<script>
+// ---- State ----
+let allNodes = [], allEdges = [];
+let recallNodeIds = new Set();
+let expandNodeIds = new Set();
+let simulation;
+
+const svg = d3.select("#graph");
+const width = () => window.innerWidth;
+const height = () => window.innerHeight;
+const g = svg.append("g");
+const tooltip = d3.select("#tooltip");
+
+// ---- Zoom ----
+svg.call(d3.zoom().scaleExtent([0.1, 4]).on("zoom", (e) => {
+  g.attr("transform", e.transform);
+}));
+
+// ---- Load data ----
+async function loadGraph() {
+  const res = await fetch("/graph");
+  const data = await res.json();
+  allNodes = data.nodes;
+  allEdges = data.edges;
+  d3.select("#nodeCount").text(`${allNodes.length} 节点 · ${allEdges.length} 边`);
+  render();
+}
+
+// ---- Render ----
+function render() {
+  if (simulation) simulation.stop();
+
+  // Clear
+  g.selectAll("*").remove();
+
+  const h = height();
+  const w = width();
+
+  // Color scales
+  const factualColor = d3.scaleLinear().domain([0, 1]).range(["#3b3b6b", "#7c7cba"]);
+  const proceduralColor = d3.scaleLinear().domain([0, 1]).range(["#5a3a2a", "#c8966a"]);
+
+  // Edge styling
+  function edgeStyle(e) {
+    if (e.inhibition >= 0.7) return { color: "#ef4444", width: 2, dash: "6,3", opacity: 0.7 };
+    if (e.is_dubious) return { color: "#f59e0b", width: 2, dash: "4,4", opacity: 0.7 };
+    if (e.forward_strength >= 0.6) return { color: "#4ade80", width: 1 + e.forward_strength * 3, dash: null, opacity: 0.8 };
+    if (e.forward_strength >= 0.3) return { color: "#6b7280", width: 1, dash: null, opacity: 0.5 };
+    return { color: "#4a4a6a", width: 0.5, dash: null, opacity: 0.3 };
+  }
+
+  // ---- Force simulation ----
+  simulation = d3.forceSimulation(allNodes)
+    .force("link", d3.forceLink(allEdges)
+      .id(d => d.id)
+      .distance(d => 100 + (1 - (d.forward_strength || 0.5)) * 120)
+      .strength(d => Math.max(0.05, (d.forward_strength || 0.5) * 0.3)))
+    .force("charge", d3.forceManyBody().strength(-250))
+    .force("collide", d3.forceCollide(d => 15 + d.coreness * 20))
+    .force("y", d3.forceY(d => h * (1 - d.coreness * 0.85)).strength(0.3))
+    .force("x", d3.forceX(w / 2).strength(0.05));
+
+  // ---- Edges ----
+  const link = g.append("g").selectAll("line")
+    .data(allEdges)
+    .join("line")
+    .attr("stroke-width", d => edgeStyle(d).width)
+    .attr("stroke", d => edgeStyle(d).color)
+    .attr("stroke-dasharray", d => edgeStyle(d).dash || null)
+    .attr("stroke-opacity", d => edgeStyle(d).opacity)
+    .attr("marker-end", d => d.forward_strength >= 0.6 ? "url(#arrow)" : null)
+    .on("mouseover", (e, d) => {
+      tooltip.style("opacity", 1)
+        .html(`<b>${d.source_id.slice(0,8)}… → ${d.target_id.slice(0,8)}…</b><br>
+               forward: ${d.forward_strength.toFixed(2)} · backward: ${d.backward_strength.toFixed(2)}<br>
+               relation: ${d.relation_type}${d.inhibition ? ` · inhibition: ${d.inhibition}` : ""}${d.is_dubious ? " · ⚠️ dubious" : ""}`);
+    })
+    .on("mousemove", (e) => {
+      tooltip.style("left", (e.pageX + 12) + "px").style("top", (e.pageY - 10) + "px");
+    })
+    .on("mouseout", () => tooltip.style("opacity", 0));
+
+  // ---- Nodes ----
+  const node = g.append("g").selectAll("g.node")
+    .data(allNodes)
+    .join("g")
+    .attr("class", "node")
+    .call(d3.drag()
+      .on("start", (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on("end", (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }));
+
+  // Outer rings (red/blue glow)
+  node.each(function(d) {
+    const el = d3.select(this);
+    if (recallNodeIds.has(d.id)) {
+      el.append("circle").attr("r", d => 14 + d.coreness * 18).attr("fill", "none")
+        .attr("stroke", "#dc2626").attr("stroke-width", 3).attr("stroke-opacity", 0.9)
+        .attr("class", "glow-red");
+    }
+    if (expandNodeIds.has(d.id) && !recallNodeIds.has(d.id)) {
+      el.append("circle").attr("r", d => 14 + d.coreness * 18).attr("fill", "none")
+        .attr("stroke", "#2563eb").attr("stroke-width", 3).attr("stroke-opacity", 0.9)
+        .attr("class", "glow-blue");
+    }
+  });
+
+  // Main circle
+  node.append("circle")
+    .attr("r", d => 7 + d.coreness * 18)
+    .attr("fill", d => d.node_type === "procedural" ? proceduralColor(d.coreness) : factualColor(d.coreness))
+    .attr("stroke", "#1a1a2e")
+    .attr("stroke-width", 2)
+    .on("mouseover", (e, d) => {
+      tooltip.style("opacity", 1)
+        .html(`<b>${d.content.length > 80 ? d.content.slice(0,80)+"…" : d.content}</b><br>
+               coreness: ${d.coreness.toFixed(3)} · type: ${d.node_type}<br>
+               tags: ${(d.tags||[]).join(", ") || "—"} · access: ${d.access_count}
+               ${recallNodeIds.has(d.id) ? '<br><span style="color:#f87171;">🔴 工作记忆区</span>' : ""}
+               ${expandNodeIds.has(d.id) ? '<br><span style="color:#60a5fa;">🔵 深度思考区</span>' : ""}`);
+    })
+    .on("mousemove", (e) => {
+      tooltip.style("left", (e.pageX + 12) + "px").style("top", (e.pageY - 10) + "px");
+    })
+    .on("mouseout", () => tooltip.style("opacity", 0));
+
+  // Labels
+  node.append("text")
+    .text(d => d.content.length > 20 ? d.content.slice(0, 18) + "…" : d.content)
+    .attr("class", "node-label")
+    .attr("dx", d => 10 + d.coreness * 12)
+    .attr("dy", 4);
+
+  // ---- Simulation tick ----
+  simulation.on("tick", () => {
+    link
+      .attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+      .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+    node.attr("transform", d => `translate(${d.x},${d.y})`);
+  });
+
+  // ---- Defs: arrowhead ----
+  if (!svg.select("defs").size()) {
+    const defs = svg.append("defs");
+    defs.append("marker").attr("id", "arrow").attr("viewBox", "0 -5 10 10").attr("refX", 20).attr("refY", 0).attr("markerWidth", 6).attr("markerHeight", 6).attr("orient", "auto")
+      .append("path").attr("d", "M0,-5L10,0L0,5").attr("fill", "#4ade80");
+  }
+}
+
+// ---- Search / Recall ----
+async function doRecall() {
+  const query = d3.select("#searchInput").property("value").trim();
+  if (!query) return;
+
+  recallNodeIds.clear();
+  expandNodeIds.clear();
+
+  const res = await fetch("/recall", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ query_text: query, top_k: 10 })
+  });
+  const results = await res.json();
+  results.forEach(r => recallNodeIds.add(r.node.id));
+  d3.select("#searchBtn").classed("active", true);
+  render();
+}
+
+async function doExpand() {
+  if (recallNodeIds.size === 0) return;
+
+  const res = await fetch("/expand", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ node_ids: Array.from(recallNodeIds), depth: 2 })
+  });
+  const data = await res.json();
+  data.nodes.forEach(n => {
+    if (!recallNodeIds.has(n.id)) expandNodeIds.add(n.id);
+  });
+  d3.select("#expandBtn").classed("active", true);
+  render();
+}
+
+function doReset() {
+  recallNodeIds.clear();
+  expandNodeIds.clear();
+  d3.select("#searchBtn").classed("active", false);
+  d3.select("#expandBtn").classed("active", false);
+  d3.select("#searchInput").property("value", "");
+  render();
+}
+
+// ---- Event bindings ----
+d3.select("#searchBtn").on("click", doRecall);
+d3.select("#searchInput").on("keydown", (e) => { if (e.key === "Enter") doRecall(); });
+d3.select("#expandBtn").on("click", doExpand);
+d3.select("#resetBtn").on("click", doReset);
+
+// ---- Init ----
+window.addEventListener("resize", () => {
+  svg.attr("width", width()).attr("height", height());
+});
+svg.attr("width", width()).attr("height", height());
+loadGraph();
+</script>
+</body>
+</html>

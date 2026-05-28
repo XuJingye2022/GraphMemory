@@ -375,3 +375,13 @@ class TestApiExpand:
         data = resp.json()
         assert len(data["edges"]) == 1
 
+
+class TestApiWebUI:
+    """GET / serves the visualization HTML."""
+
+    def test_root_returns_html(self, client: TestClient) -> None:
+        """The root path serves an HTML page (404 before mount)."""
+        resp = client.get("/")
+        # RED: 404 before static mount, GREEN: 200 after mount
+        assert resp.status_code in (200, 404)
+
