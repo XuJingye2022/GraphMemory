@@ -31,10 +31,17 @@ class GraphMemory:
         self.config = config or Config()
         self.db = Database(db_path)
         self.db.initialize()
-        try:
-            self.engine = EmbeddingEngine()
-        except Exception:
-            self.engine = None
+        self._engine = None
+
+    @property
+    def engine(self):
+        if self._engine is None:
+            try:
+                from .embeddings import EmbeddingEngine  # noqa: PLC0415
+                self._engine = EmbeddingEngine()
+            except Exception:
+                pass
+        return self._engine
 
     # ------------------------------------------------------------------
     # Node operations
