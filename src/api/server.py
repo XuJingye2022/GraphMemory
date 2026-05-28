@@ -346,6 +346,90 @@ async def maintenance_status(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Graph visualization endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/graph")
+async def graph(request: Request):
+    """Return all nodes and edges for the graph visualization."""
+    memory: GraphMemory = request.app.state.memory
+    nodes = memory.db.list_nodes(include_deleted=False)
+    edges = memory.db.list_edges()
+    return {
+        "nodes": [_node_to_dict(n) for n in nodes],
+        "edges": [
+            {
+                "source_id": e.source_id,
+                "target_id": e.target_id,
+                "forward_strength": e.forward_strength,
+                "backward_strength": e.backward_strength,
+                "relation_type": e.relation_type,
+                "inhibition": e.inhibition,
+                "is_dubious": e.is_dubious,
+            }
+            for e in edges
+        ],
+    }
+
+
+@app.post("/expand")
+async def expand(request: Request, body: dict = Body(...)):
+    """Expand from seed nodes out to 2-hop neighbors."""
+    memory: GraphMemory = request.app.state.memory
+    seed_ids: list[str] = body.get("node_ids", [])
+    depth: int = body.get("depth", 2)
+
+    visited = set(seed_ids)
+    frontier = set(seed_ids)
+
+    for _ in range(depth):
+        next_frontier = set()
+        for nid in frontier:
+            out_edges = memory.db.list_edges(source=nid)
+            in_edges = memory.db.list_edges(target=nid)
+            for e in out_edges + in_edges:
+                neighbor = e.target_id if e.source_id == nid else e.source_id
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    next_frontier.add(neighbor)
+        frontier = next_frontier
+        if not frontier:
+            break
+
+    expanded_nodes = []
+    for nid in visited:
+        node = memory.db.get_node(nid)
+        if node is not None:
+            expanded_nodes.append(_node_to_dict(node))
+
+    expanded_edges = []
+    seen_pairs = set()
+    for nid in visited:
+        out_edges = memory.db.list_edges(source=nid)
+        for e in out_edges:
+            if e.source_id in visited and e.target_id in visited:
+                key = (e.source_id, e.target_id)
+                if key not in seen_pairs:
+                    seen_pairs.add(key)
+                    expanded_edges.append({
+                        "source_id": e.source_id,
+                        "target_id": e.target_id,
+                        "forward_strength": e.forward_strength,
+                        "backward_strength": e.backward_strength,
+                        "relation_type": e.relation_type,
+                        "inhibition": e.inhibition,
+                        "is_dubious": e.is_dubious,
+                    })
+
+    return {
+        "nodes": expanded_nodes,
+        "edges": expanded_edges,
+        "depth": depth,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Stats
 # ---------------------------------------------------------------------------
 

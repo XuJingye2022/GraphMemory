@@ -290,3 +290,88 @@ class TestApiStats:
         data = resp.json()
         assert data["node_count"] == 1
         assert data["edge_count"] == 0
+
+
+# ===================================================================
+# Graph visualization
+# ===================================================================
+
+class TestApiGraph:
+    """GET /graph returns all nodes and edges for visualization."""
+
+    def test_graph_empty(self, client: TestClient) -> None:
+        """GET /graph on empty DB returns empty lists."""
+        resp = client.get("/graph")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["nodes"] == []
+        assert data["edges"] == []
+
+    def test_graph_with_data(self, client: TestClient) -> None:
+        """GET /graph returns all stored nodes and edges."""
+        n1 = client.post("/nodes", json={"content": "Node A", "tags": ["x"]}).json()["node_id"]
+        n2 = client.post("/nodes", json={"content": "Node B"}).json()["node_id"]
+        client.post("/edges", json={"source_id": n1, "target_id": n2, "relation_type": "sequence"})
+
+        resp = client.get("/graph")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["nodes"]) == 2
+        assert len(data["edges"]) == 1
+        edge = data["edges"][0]
+        assert edge["source_id"] == n1
+        assert edge["target_id"] == n2
+        assert edge["relation_type"] == "sequence"
+
+
+class TestApiExpand:
+    """POST /expand returns neighbor nodes from seed nodes."""
+
+    def test_expand_empty_seeds(self, client: TestClient) -> None:
+        """Empty seed list returns empty graph."""
+        resp = client.post("/expand", json={"node_ids": []})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["nodes"] == []
+        assert data["edges"] == []
+
+    def test_expand_one_hop(self, client: TestClient) -> None:
+        """Seeds plus their direct neighbors returned."""
+        a = client.post("/nodes", json={"content": "A"}).json()["node_id"]
+        b = client.post("/nodes", json={"content": "B"}).json()["node_id"]
+        c = client.post("/nodes", json={"content": "C"}).json()["node_id"]
+        client.post("/edges", json={"source_id": a, "target_id": b, "relation_type": "sequence"})
+        client.post("/edges", json={"source_id": b, "target_id": c, "relation_type": "sequence"})
+
+        # Expand from A, depth=1 → get A and B
+        resp = client.post("/expand", json={"node_ids": [a], "depth": 1})
+        assert resp.status_code == 200
+        data = resp.json()
+        got_ids = {n["id"] for n in data["nodes"]}
+        assert a in got_ids
+        assert b in got_ids
+        assert c not in got_ids  # 2 hops away, depth=1 shouldn't reach
+
+    def test_expand_two_hops(self, client: TestClient) -> None:
+        """depth=2 reaches 2-hop neighbors."""
+        a = client.post("/nodes", json={"content": "A"}).json()["node_id"]
+        b = client.post("/nodes", json={"content": "B"}).json()["node_id"]
+        c = client.post("/nodes", json={"content": "C"}).json()["node_id"]
+        client.post("/edges", json={"source_id": a, "target_id": b})
+        client.post("/edges", json={"source_id": b, "target_id": c})
+
+        resp = client.post("/expand", json={"node_ids": [a], "depth": 2})
+        data = resp.json()
+        got_ids = {n["id"] for n in data["nodes"]}
+        assert c in got_ids  # depth=2 should reach C
+
+    def test_expand_returns_edges(self, client: TestClient) -> None:
+        """Expanded subgraph includes connecting edges."""
+        a = client.post("/nodes", json={"content": "A"}).json()["node_id"]
+        b = client.post("/nodes", json={"content": "B"}).json()["node_id"]
+        client.post("/edges", json={"source_id": a, "target_id": b})
+
+        resp = client.post("/expand", json={"node_ids": [a], "depth": 1})
+        data = resp.json()
+        assert len(data["edges"]) == 1
+
