@@ -60,7 +60,7 @@ def client() -> TestClient:
         return _real_connect(database, *args, **kwargs)
 
     with (
-        patch("graph_memory.core.EmbeddingEngine") as mock_ee,
+        patch("graph_memory.embeddings.EmbeddingEngine") as mock_ee,
         patch("sqlite3.connect", side_effect=_threadsafe_connect),
     ):
         mock_ee.side_effect = Exception("Embeddings disabled in test")

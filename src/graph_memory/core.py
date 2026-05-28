@@ -7,7 +7,6 @@ import numpy as np
 
 from .config import Config
 from .db import Database
-from .embeddings import EmbeddingEngine
 from .models import Edge, Node
 
 

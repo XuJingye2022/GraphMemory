@@ -145,7 +145,16 @@ app = FastAPI(title="Graph Memory API", version="0.1.0", lifespan=lifespan)
 
 _WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 if _WEB_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(_WEB_DIR), html=True), name="web")
+    app.mount("/static", StaticFiles(directory=str(_WEB_DIR), html=True), name="web")
+
+    @app.get("/")
+    async def index():
+        """Serve the visualization HTML."""
+        from fastapi.responses import HTMLResponse
+        html_path = _WEB_DIR / "index.html"
+        if html_path.exists():
+            return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+        return {"status": "no_index"}
 
 
 # ---------------------------------------------------------------------------
